@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HdrFrame.h"
+#include <dxgi1_6.h>
 #include <array>
 
 namespace Magpie {
@@ -48,6 +49,15 @@ public:
         HdrTransferFunction inputTransfer,
         HdrTransferFunction outputTransfer,
         const HdrTransformParameters& parameters
+    ) noexcept;
+
+    // Builds an HDR10 mastering/CLL metadata block from a pipeline color
+    // description for IDXGISwapChain4::SetHDRMetaData. Returns false when the
+    // description carries no usable luminance range (then callers should keep
+    // the display default instead of sending zeros).
+    static bool BuildHdr10Metadata(
+        const ColorDescription& color,
+        DXGI_HDR_METADATA_HDR10& metadata
     ) noexcept;
 };
 

@@ -3,6 +3,7 @@
 #include "FrameTrace.h"
 #include "XeSSFGPresenter.h"
 #include "XeSSFGTiming.h"
+#include "HdrColorTransform.h"
 #include "DeviceResources.h"
 #include "Logger.h"
 #include "ScalingWindow.h"
@@ -33,6 +34,61 @@ static DXGI_FORMAT ColorFormat(bool hdr) noexcept {
 }
 static DXGI_FORMAT OverlayFormat(bool hdr) noexcept {
 	return hdr ? OVERLAY_FORMAT : LDR_COLOR_FORMAT;
+}
+
+// HDR10 静态元数据（mastering 显示器与 CLL/FALL）描述内容的亮度范围，供显示器
+// 色调映射使用。缺少显示器元数据时保留系统默认，不发送退化值。
+static void _ApplyHdr10MetaData(IDXGISwapChain4* swapChain) noexcept {
+	assert(swapChain);
+
+	const HWND hwnd = ScalingWindow::Get().Handle();
+	if (!hwnd) return;
+
+	const HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+	if (!monitor) return;
+
+	ColorDescription color{};
+	// 通过呈现设备的适配器枚举输出，定位源窗口所在显示器的 Desc1 元数据。
+	winrt::com_ptr<IDXGIDevice> dxgiDevice;
+	if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(dxgiDevice.put())))) {
+		winrt::com_ptr<IDXGIAdapter> swapChainAdapter;
+		if (SUCCEEDED(dxgiDevice->GetAdapter(swapChainAdapter.put()))) {
+			winrt::com_ptr<IDXGIOutput> output;
+			for (UINT i = 0; SUCCEEDED(swapChainAdapter->EnumOutputs(i, output.put())); ++i) {
+				DXGI_OUTPUT_DESC desc{};
+				if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor == monitor) break;
+				output = nullptr;
+			}
+			if (output) {
+				winrt::com_ptr<IDXGIOutput6> output6 = output.try_as<IDXGIOutput6>();
+				DXGI_OUTPUT_DESC1 desc1{};
+				if (output6 && SUCCEEDED(output6->GetDesc1(&desc1))) {
+					color.dxgiColorSpace = desc1.ColorSpace;
+					color.displayPeakNits = desc1.MaxLuminance > 0.0f ? desc1.MaxLuminance : 1000.0f;
+					color.metadata.maxMasteringLuminanceNits = desc1.MaxLuminance;
+					color.metadata.minMasteringLuminanceNits = desc1.MinLuminance;
+					color.metadata.maxContentLightLevelNits = desc1.MaxLuminance;
+					color.metadata.maxFrameAverageLightLevelNits = desc1.MaxFullFrameLuminance;
+				}
+			}
+		}
+	}
+
+	DXGI_HDR_METADATA_HDR10 hdr10{};
+	if (!HdrColorTransform::BuildHdr10Metadata(color, hdr10)) return;
+
+	const HRESULT hr = swapChain->SetHDRMetaData(
+		DXGI_HDR_METADATA_TYPE_HDR10, sizeof(hdr10), &hdr10);
+	if (SUCCEEDED(hr)) {
+		Logger::Get().Info(fmt::format(
+			"XeSSFG HDR10 metadata: min={:.0f} max={:.0f} CLL={:.0f} FALL={:.0f} nits",
+			color.metadata.minMasteringLuminanceNits,
+			color.metadata.maxMasteringLuminanceNits,
+			color.metadata.maxContentLightLevelNits,
+			color.metadata.maxFrameAverageLightLevelNits));
+	} else {
+		Logger::Get().ComWarn("SetHDRMetaData failed", hr);
+	}
 }
 
 static bool XeFGSucceeded(xefg_swapchain_result_t result) noexcept {
@@ -623,6 +679,7 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 			return false;
 		}
 		Logger::Get().Info("XeSSFG endpoint: format=R10G10B10A2_UNORM colorSpace=HDR10/BT.2100");
+		_ApplyHdr10MetaData(impl->swapChain.get());
 	}
 	impl->swapChain->SetMaximumFrameLatency(1);
 	impl->frameLatencyWaitableObject.reset(
@@ -1100,6 +1157,7 @@ bool XeSSFGPresenter::OnResize() noexcept {
 				"Restore XeSSFG HDR10/BT.2100 color space after resize failed", hr);
 			return false;
 		}
+		_ApplyHdr10MetaData(impl.swapChain.get());
 	}
 	impl.width = width;
 	impl.height = height;

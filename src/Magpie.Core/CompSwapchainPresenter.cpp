@@ -95,6 +95,17 @@ bool CompSwapchainPresenter::_Initialize(HWND hwndAttach) noexcept {
 		return false;
 	}
 
+	// FP16 缓冲区必须显式声明 scRGB 色彩空间，DWM 才会按线性 1.0 == 80 nit
+	// 解读码值并送往高级颜色合成，与 AdaptivePresenter 的 SetColorSpace1 对应。
+	if (ScalingWindow::Get().Options().IsHdrCompatibilityEnabled()) {
+		hr = _presentationSurface->SetColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+		if (FAILED(hr)) {
+			Logger::Get().ComError("设置 HDR 呈现表面色彩空间失败", hr);
+			return false;
+		}
+		Logger::Get().Info("Composition swap-chain: R16G16B16A16_FLOAT / scRGB (G10_NONE_P709)");
+	}
+
 	winrt::com_ptr<IUnknown> compSurface;
 	hr = _dcompDevice->CreateSurfaceFromHandle(hCompSurface.get(), compSurface.put());
 	if (FAILED(hr)) {

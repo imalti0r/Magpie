@@ -290,6 +290,16 @@ ColorDescription FrameSourceBase::_GetSourceColorDescription() const noexcept {
 
 		switch (desc1.ColorSpace) {
 		case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
+			// 16 位浮点捕获面（WGC FP16 帧池、DuplicateOutput1 的 FP16 桌面复制）
+			// 存储的总是线性 scRGB 码值（1.0 == 80 nit）；显示器 PQ 元数据描述
+			// 的是显示端变换，不是这些存储码值。仅 10 位 PQ 面才按 PQ 解码。
+			if (capturedDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+				result.primaries = HdrColorPrimaries::Rec709;
+				result.transfer = HdrTransferFunction::Linear;
+				result.range = HdrColorRange::SceneLinear;
+				result.isSceneReferred = true;
+				break;
+			}
 			result.primaries = HdrColorPrimaries::Rec2020;
 			result.transfer = HdrTransferFunction::PQ;
 			break;

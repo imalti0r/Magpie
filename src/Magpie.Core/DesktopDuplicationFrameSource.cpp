@@ -6,6 +6,7 @@
 #include "ScalingWindow.h"
 #include "SmallVector.h"
 #include "Win32Helper.h"
+#include "HdrDisplayPreflight.h"
 
 namespace Magpie {
 
@@ -80,9 +81,14 @@ bool DesktopDuplicationFrameSource::_Initialize() noexcept {
 		1
 	};
 	
+	// HDR 组件要求捕获 HDR 且显示器处于 HDR 模式时，输出面使用 FP16 以容纳
+	// DuplicateOutput1 提供的 scRGB 线性桌面图像；其余情况保持 8 位 SDR。
+	_requestHdrDuplication = ScalingWindow::Get().Options().IsHdrCaptureEnabled() &&
+		IsHdrMonitorActive(hMonitor);
+
 	_output = DirectXHelper::CreateTexture2D(
 		_deviceResources->GetD3DDevice(),
-		DXGI_FORMAT_B8G8R8A8_UNORM,
+		_requestHdrDuplication ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM,
 		srcRect.right - srcRect.left,
 		srcRect.bottom - srcRect.top,
 		D3D11_BIND_SHADER_RESOURCE
@@ -112,10 +118,30 @@ bool DesktopDuplicationFrameSource::_Initialize() noexcept {
 bool DesktopDuplicationFrameSource::Start() noexcept {
 	_DisableRoundCornerInWin11();
 
-	HRESULT hr = _dxgiOutput->DuplicateOutput(_deviceResources->GetD3DDevice(), _outputDup.put());
-	if (FAILED(hr)) {
-		Logger::Get().ComError("DuplicateOutput 失败", hr);
-		return false;
+	HRESULT hr;
+	if (_requestHdrDuplication) {
+		// DuplicateOutput1 才能请求 R16G16B16A16_FLOAT。HDR 桌面上该格式返回
+		// 线性 scRGB 码值（1.0 == 80 nit），由 HdrCaptureProcessor 归一化。
+		winrt::com_ptr<IDXGIOutput5> output5 = _dxgiOutput.try_as<IDXGIOutput5>();
+		if (!output5) {
+			Logger::Get().Error("从 IDXGIOutput1 获取 IDXGIOutput5 失败");
+			return false;
+		}
+		static constexpr DXGI_FORMAT hdrFormats[] = { DXGI_FORMAT_R16G16B16A16_FLOAT };
+		hr = output5->DuplicateOutput1(
+			_deviceResources->GetD3DDevice(), 0,
+			(UINT)std::size(hdrFormats), hdrFormats, _outputDup.put());
+		if (FAILED(hr)) {
+			Logger::Get().ComError("DuplicateOutput1 (HDR FP16) 失败", hr);
+			return false;
+		}
+		Logger::Get().Info("Desktop Duplication HDR: R16G16B16A16_FLOAT scRGB surface");
+	} else {
+		hr = _dxgiOutput->DuplicateOutput(_deviceResources->GetD3DDevice(), _outputDup.put());
+		if (FAILED(hr)) {
+			Logger::Get().ComError("DuplicateOutput 失败", hr);
+			return false;
+		}
 	}
 
 	return true;

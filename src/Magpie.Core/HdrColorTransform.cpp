@@ -138,4 +138,47 @@ HdrColor HdrColorTransform::Transform(
     return result;
 }
 
+bool HdrColorTransform::BuildHdr10Metadata(
+    const ColorDescription& color,
+    DXGI_HDR_METADATA_HDR10& metadata
+) noexcept {
+    // HDR10 static metadata feeds the display's tone mapping. Without a
+    // measured mastering range the description would produce degenerate
+    // min/max values, so leave the swap chain's display-provided default.
+    if (!color.metadata.HasLuminanceRange()) return false;
+
+    // Master primaries/white point are declared in 1e-5 units of CIE 1931
+    // chromaticity. The capture chain is Rec.709 (sRGB/scRGB), so the
+    // mastering colorimetry follows the content, not the monitor gamut.
+    constexpr UINT16 Rec709Primaries[3][2] = {
+        { 32000, 16500 },	// R: 0.640, 0.330
+        { 15000, 30000 },	// G: 0.300, 0.600
+        { 7500, 3000 },		// B: 0.150, 0.060
+    };
+    constexpr UINT16 D65WhitePoint[2] = { 15635, 16450 };	// 0.3127, 0.3290
+
+    metadata.RedPrimary[0] = Rec709Primaries[0][0];
+    metadata.RedPrimary[1] = Rec709Primaries[0][1];
+    metadata.GreenPrimary[0] = Rec709Primaries[1][0];
+    metadata.GreenPrimary[1] = Rec709Primaries[1][1];
+    metadata.BluePrimary[0] = Rec709Primaries[2][0];
+    metadata.BluePrimary[1] = Rec709Primaries[2][1];
+    metadata.WhitePoint[0] = D65WhitePoint[0];
+    metadata.WhitePoint[1] = D65WhitePoint[1];
+    metadata.MaxMasteringLuminance = static_cast<UINT>(std::lround(
+        std::max(color.metadata.maxMasteringLuminanceNits, color.displayPeakNits)));
+    metadata.MinMasteringLuminance = static_cast<UINT>(std::lround(
+        std::max(color.metadata.minMasteringLuminanceNits, 0.0f)));
+    // CLL/FALL describe content brightness; fall back to the mastering peak
+    // when the display query provided no full-frame figure.
+    const float contentPeak = color.metadata.maxContentLightLevelNits > 0.0f
+        ? color.metadata.maxContentLightLevelNits
+        : std::max(color.metadata.maxMasteringLuminanceNits, color.displayPeakNits);
+    metadata.MaxContentLightLevel = static_cast<UINT16>(std::lround(std::min(contentPeak, 65535.0f)));
+    const float fall = color.metadata.maxFrameAverageLightLevelNits > 0.0f
+        ? color.metadata.maxFrameAverageLightLevelNits : contentPeak;
+    metadata.MaxFrameAverageLightLevel = static_cast<UINT16>(std::lround(std::min(fall, 65535.0f)));
+    return metadata.MaxMasteringLuminance >= metadata.MinMasteringLuminance;
+}
+
 }

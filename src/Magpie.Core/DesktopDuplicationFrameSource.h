@@ -31,6 +31,10 @@ private:
 	D3D11_BOX _frameInMonitor{};
 
 	bool _isFrameAcquired = false;
+	// HDR 组件要求捕获 HDR 时按显示器状态创建 FP16 输出面，并用
+	// DuplicateOutput1 请求 scRGB FP16 桌面复制。Start 阶段可能因驱动拒绝
+	// 而失败，此时整体启动失败而不是静默降级到 8 位捕获。
+	bool _requestHdrDuplication = false;
 };
 
 }

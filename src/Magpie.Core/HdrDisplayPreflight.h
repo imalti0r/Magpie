@@ -55,7 +55,13 @@ inline ScalingError CheckHdrComponentPrerequisites(HWND source, const ScalingOpt
 	}
 	const HMONITOR sourceMonitor = MonitorFromWindow(source, MONITOR_DEFAULTTONEAREST);
 	if (plan.captureHdr) {
-		if (options.captureMethod != CaptureMethod::GraphicsCapture) return ScalingError::HdrCaptureMethodRequired;
+		// 两条捕获路径都能提供 HDR 源：Graphics Capture 使用 WGC 的 FP16 帧池，
+		// Desktop Duplication 通过 DuplicateOutput1 请求 FP16 scRGB 桌面图像。
+		// GDI 与 DWM 共享面只能给出 8 位显示引用码值，仍然拒绝。
+		const bool hdrCapableCapture =
+			options.captureMethod == CaptureMethod::GraphicsCapture ||
+			options.captureMethod == CaptureMethod::DesktopDuplication;
+		if (!hdrCapableCapture) return ScalingError::HdrCaptureMethodRequired;
 		if (!IsHdrMonitorActive(sourceMonitor)) return ScalingError::HdrCaptureRequired;
 	}
 	if (!plan.outputHdr) return ScalingError::NoError;
